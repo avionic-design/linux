@@ -936,6 +936,19 @@ config GPIO_SODAVILLE
 
 endmenu
 
+config GPIO_AD64P
+	tristate "Avionic Design GPIO (64 pin) expander"
+	depends on PCI && OF_GPIO
+	help
+	  Say Y here to support the Avionic Design GPIO (64 pin) expander.
+
+config GPIO_AD64P_IRQ
+	bool "Interrupt controller support"
+	depends on GPIO_AD64P
+	help
+	  Say yes here to enable the Avionic Design 64-pin GPIO expander to
+	  be used as an interrupt controller.
+
 menu "SPI GPIO expanders"
 	depends on SPI_MASTER
 
