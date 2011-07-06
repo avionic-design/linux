@@ -1757,6 +1757,16 @@ static int pci_fintek_init(struct pci_dev *dev)
 	return max_port;
 }
 
+static int pci_msi_init(struct pci_dev *dev)
+{
+	return pci_enable_msi(dev);
+}
+
+static void pci_msi_exit(struct pci_dev *dev)
+{
+	pci_disable_msi(dev);
+}
+
 static int skip_tx_en_setup(struct serial_private *priv,
 			const struct pciserial_board *board,
 			struct uart_8250_port *port, int idx)
@@ -2551,6 +2561,15 @@ static struct pci_serial_quirk pci_serial_quirks[] __refdata = {
 		.init		= pci_netmos_init,
 		.setup		= pci_netmos_9900_setup,
 	},
+	{
+		.vendor		= PCI_VENDOR_ID_AVIONIC_DESIGN,
+		.device		= 0x0004,
+		.subvendor	= PCI_ANY_ID,
+		.subdevice	= PCI_ANY_ID,
+		.init		= pci_msi_init,
+		.setup		= pci_default_setup,
+		.exit		= pci_msi_exit,
+	},
 	/*
 	 * EndRun Technologies
 	*/
@@ -2888,6 +2907,7 @@ enum pci_board_num_t {
 	pbn_default = 0,
 
 	pbn_b0_1_115200,
+	pbn_b0_1_115200_64_3,
 	pbn_b0_2_115200,
 	pbn_b0_4_115200,
 	pbn_b0_5_115200,
@@ -3055,6 +3075,13 @@ static struct pciserial_board pci_boards[] = {
 		.num_ports	= 1,
 		.base_baud	= 115200,
 		.uart_offset	= 8,
+	},
+	[pbn_b0_1_115200_64_3] = {
+		.flags		= FL_BASE0,
+		.num_ports	= 1,
+		.base_baud	= 115200,
+		.uart_offset	= 8 << 3,
+		.reg_shift	= 3,
 	},
 	[pbn_b0_2_115200] = {
 		.flags		= FL_BASE0,
@@ -5504,6 +5531,10 @@ static struct pci_device_id serial_pci_tbl[] = {
 	{	PCI_VENDOR_ID_NETMOS, PCI_DEVICE_ID_NETMOS_9900,
 		0xA000, 0x3002,
 		0, 0, pbn_NETMOS9900_2s_115200 },
+
+	{	PCI_VENDOR_ID_AVIONIC_DESIGN, 0x0004,
+		PCI_ANY_ID, PCI_ANY_ID, 0, 0,
+		pbn_b0_1_115200_64_3 },
 
 	/*
 	 * Best Connectivity and Rosewill PCI Multi I/O cards
