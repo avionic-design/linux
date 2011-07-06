@@ -332,6 +332,11 @@ config SPI_OC_TINY
 	help
 	  This is the driver for OpenCores tiny SPI master controller.
 
+config SPI_OCORES
+	tristate "OpenCores SPI controller"
+	help
+	  This enables using the OpenCores SPI controller.
+
 config SPI_OCTEON
 	tristate "Cavium OCTEON SPI controller"
 	depends on CAVIUM_OCTEON_SOC
