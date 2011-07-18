@@ -2457,6 +2457,12 @@ config TS5500
 	---help---
 	  This option enables system support for the Technologic Systems TS-5500.
 
+config MEDATOM
+	bool "Avionic Design Medatom support"
+	select OF
+	select OF_FLATTREE
+	select OF_EARLY_FLATTREE
+
 endif # X86_32
 
 config AMD_NB
