@@ -99,6 +99,8 @@ struct tm6000_dmaqueue {
 	/* Counters to control fps rate */
 	int                        frame;
 	int                        ini_jiffies;
+
+	struct timer_list timeout;
 };
 
 /* device states */
