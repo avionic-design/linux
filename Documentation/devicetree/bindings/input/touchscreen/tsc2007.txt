@@ -21,6 +21,8 @@ Optional properties:
 - ti,fuzzz: specifies the absolute input fuzz z value.
 - ti,poll-period: how much time to wait (in milliseconds) before reading again the
   values from the tsc2007.
+- ti,poll-delay: how much time to wait (in milliseconds) for the input
+  signal to stabilize before reading a value from the tsc2007.
 
 [0]: Documentation/devicetree/bindings/interrupt-controller/interrupts.txt
 [1]: Documentation/devicetree/bindings/gpio/gpio.txt

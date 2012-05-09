@@ -24,6 +24,7 @@
 #include <linux/slab.h>
 #include <linux/input.h>
 #include <linux/interrupt.h>
+#include <linux/delay.h>
 #include <linux/i2c.h>
 #include <linux/i2c/tsc2007.h>
 #include <linux/of_device.h>
@@ -75,6 +76,7 @@ struct tsc2007 {
 	u16			model;
 	u16			x_plate_ohms;
 	u16			max_rt;
+	unsigned long		poll_delay;
 	unsigned long		poll_period; /* in jiffies */
 	int			fuzzx;
 	int			fuzzy;
@@ -176,6 +178,13 @@ static irqreturn_t tsc2007_soft_irq(int irq, void *handle)
 	struct input_dev *input = ts->input;
 	struct ts_event tc;
 	u32 rt;
+
+	/*
+	 * With some panels we need to wait a bit otherwise the first value
+	 * is often wrong.
+	 */
+	if (ts->poll_delay > 0)
+		msleep(ts->poll_delay);
 
 	while (!ts->stopped && tsc2007_is_pen_down(ts)) {
 
@@ -317,6 +326,11 @@ static int tsc2007_probe_dt(struct i2c_client *client, struct tsc2007 *ts)
 	else
 		ts->poll_period = msecs_to_jiffies(1);
 
+	if (!of_property_read_u64(np, "ti,poll-delay", &val64))
+		ts->poll_delay = val64;
+	else
+		ts->poll_delay = 0;
+
 	if (!of_property_read_u32(np, "ti,x-plate-ohms", &val32)) {
 		ts->x_plate_ohms = val32;
 	} else {
@@ -349,6 +363,7 @@ static int tsc2007_probe_pdev(struct i2c_client *client, struct tsc2007 *ts,
 	ts->model             = pdata->model;
 	ts->x_plate_ohms      = pdata->x_plate_ohms;
 	ts->max_rt            = pdata->max_rt ? : MAX_12BIT;
+	ts->poll_delay        = pdata->poll_delay ? : 0;
 	ts->poll_period       = msecs_to_jiffies(pdata->poll_period ? : 1);
 	ts->get_pendown_state = pdata->get_pendown_state;
 	ts->clear_penirq      = pdata->clear_penirq;
