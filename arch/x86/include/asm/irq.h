@@ -10,6 +10,14 @@
 #include <asm/apicdef.h>
 #include <asm/irq_vectors.h>
 
+/*
+ * Use this value to indicate lack of interrupt
+ * capability.
+ */
+#ifndef NO_IRQ
+#define NO_IRQ ((unsigned int)(-1))
+#endif
+
 static inline int irq_canonicalize(int irq)
 {
 	return ((irq == 2) ? 9 : irq);
