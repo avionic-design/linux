@@ -2992,4 +2992,6 @@
 
 #define PCI_VENDOR_ID_OCZ		0x1b85
 
+#define PCI_VENDOR_ID_AVIONIC_DESIGN	0xa510
+
 #endif /* _LINUX_PCI_IDS_H */
