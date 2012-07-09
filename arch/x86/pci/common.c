@@ -464,6 +464,16 @@ static const struct dmi_system_id pciprobe_dmi_table[] __initconst = {
                         DMI_MATCH(DMI_PRODUCT_NAME, "Express5800/R31"),
                 },
         },
+#ifdef __i386__
+	{
+		.callback = assign_all_busses,
+		.ident = "Avionic Design Medatom",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Avionic Design GmbH"),
+			DMI_MATCH(DMI_PRODUCT_NAME, "Medatom"),
+		},
+	},
+#endif
 	{}
 };
 
