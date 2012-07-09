@@ -10,6 +10,7 @@
 #include <linux/videodev2.h>
 #include <linux/delay.h>
 #include <linux/module.h>
+#include <linux/of_gpio.h>
 #include <media/v4l2-device.h>
 #include <media/tvp5150.h>
 #include <media/v4l2-ctrls.h>
@@ -41,6 +42,11 @@ struct tvp5150 {
 	u32 input;
 	u32 output;
 	int enable;
+
+	int power_invert;
+	int power_gpio;
+	int reset_invert;
+	int reset_gpio;
 };
 
 static inline struct tvp5150 *to_tvp5150(struct v4l2_subdev *sd)
@@ -1096,9 +1102,40 @@ static const struct v4l2_subdev_ops tvp5150_ops = {
 			I2C Client & Driver
  ****************************************************************************/
 
+static struct tvp5150_platform_data *tvp5150_parse_dt(struct device *dev)
+{
+	struct tvp5150_platform_data *pdata;
+	enum of_gpio_flags flags;
+
+	pdata = devm_kzalloc(dev, sizeof(*pdata), GFP_KERNEL);
+	if (!pdata)
+		return NULL;
+
+	pdata->power_gpio = of_get_named_gpio_flags(dev->of_node,
+						    "power-gpios", 0, &flags);
+	if (gpio_is_valid(pdata->power_gpio)) {
+		if (flags & OF_GPIO_ACTIVE_LOW)
+			pdata->power_invert = 1;
+		else
+			pdata->power_invert = 0;
+	}
+
+	pdata->reset_gpio = of_get_named_gpio_flags(dev->of_node,
+						    "reset-gpios", 0, &flags);
+	if (gpio_is_valid(pdata->reset_gpio)) {
+		if (flags & OF_GPIO_ACTIVE_LOW)
+			pdata->reset_invert = 1;
+		else
+			pdata->reset_invert = 0;
+	}
+
+	return pdata;
+}
+
 static int tvp5150_probe(struct i2c_client *c,
 			 const struct i2c_device_id *id)
 {
+	struct tvp5150_platform_data *pdata = dev_get_platdata(&c->dev);
 	struct tvp5150 *core;
 	struct v4l2_subdev *sd;
 	int tvp5150_id[4];
@@ -1112,7 +1149,50 @@ static int tvp5150_probe(struct i2c_client *c,
 	core = devm_kzalloc(&c->dev, sizeof(*core), GFP_KERNEL);
 	if (!core)
 		return -ENOMEM;
+	core->power_gpio = -EINVAL;
+	core->reset_gpio = -EINVAL;
 	sd = &core->sd;
+
+	if (IS_ENABLED(CONFIG_OF) && c->dev.of_node) {
+		pdata = tvp5150_parse_dt(&c->dev);
+		if (!pdata)
+			return -ENODEV;
+	}
+
+	if (pdata) {
+		core->power_invert = pdata->power_invert;
+		core->power_gpio = pdata->power_gpio;
+
+		core->reset_invert = pdata->reset_invert;
+		core->reset_gpio = pdata->reset_gpio;
+	}
+
+	if (gpio_is_valid(core->power_gpio)) {
+		int err = devm_gpio_request(&c->dev, core->power_gpio,
+					    "TVP5150 powerdown");
+		if (err < 0)
+			return err;
+
+		err = gpio_direction_output(core->power_gpio,
+					    core->power_invert);
+		if (err < 0)
+			return err;
+	}
+
+	if (gpio_is_valid(core->reset_gpio)) {
+		int err = devm_gpio_request(&c->dev, core->reset_gpio,
+					    "TVP5150 reset");
+		if (err < 0)
+			return err;
+
+		err = gpio_direction_output(core->reset_gpio,
+					    core->reset_invert);
+		if (err < 0)
+			return err;
+
+		usleep_range(200, 200);
+	}
+
 	v4l2_i2c_subdev_init(sd, c, &tvp5150_ops);
 
 	/* 
@@ -1194,6 +1274,13 @@ static int tvp5150_remove(struct i2c_client *c)
 
 	v4l2_device_unregister_subdev(sd);
 	v4l2_ctrl_handler_free(&decoder->hdl);
+
+	if (gpio_is_valid(decoder->reset_gpio))
+		gpio_set_value(decoder->reset_gpio, !decoder->reset_invert);
+
+	if (gpio_is_valid(decoder->power_gpio))
+		gpio_set_value(decoder->power_gpio, !decoder->power_invert);
+
 	return 0;
 }
 
