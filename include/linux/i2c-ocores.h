@@ -11,6 +11,8 @@
 #ifndef _LINUX_I2C_OCORES_H
 #define _LINUX_I2C_OCORES_H
 
+#include <linux/types.h>
+
 struct ocores_i2c_platform_data {
 	u32 reg_shift; /* register offset shift value */
 	u32 reg_io_width; /* register io read/write width */
