@@ -419,6 +419,56 @@ static int sx8634_set_threshold(struct sx8634 *sx, unsigned int cap,
 	return 0;
 }
 
+static int sx8634_pwm_enable(struct sx8634 *sx, unsigned int gpio,
+			     unsigned int brightness)
+{
+	unsigned int mode = (gpio >= 4) ? 0x40 : 0x41;
+	unsigned int mode_shift = (gpio & 0x3) * 2;
+	unsigned int mode_mask = 0x3 << mode_shift;
+	u8 value;
+	int err;
+
+	if (!sx || gpio > 7 || brightness > 255)
+		return -EINVAL;
+
+	/* use GPIO[7] as PWM */
+	err = sx8634_spm_read(sx, mode, &value);
+	if (err < 0)
+		return err;
+
+	value = (value & ~mode_mask) | (0x1 << mode_shift);
+
+	err = sx8634_spm_write(sx, mode, value);
+	if (err < 0)
+		return err;
+
+	/* invert polarity */
+	err = sx8634_spm_read(sx, 0x44, &value);
+	if (err < 0)
+		return err;
+
+	value &= ~BIT(gpio);
+
+	err = sx8634_spm_write(sx, 0x44, value);
+	if (err < 0)
+		return err;
+
+	err = sx8634_spm_sync(sx);
+	if (err < 0)
+		return err;
+
+	/* set PWM brightness */
+	err = sx8634_write(sx, I2C_GPP_PIN_ID, gpio);
+	if (err < 0)
+		return err;
+
+	err = sx8634_write(sx, I2C_GPP_INTENSITY, brightness);
+	if (err < 0)
+		return err;
+
+	return 0;
+}
+
 static int sx8634_setup(struct sx8634 *sx, struct sx8634_platform_data *pdata)
 {
 	bool slider = false;
@@ -497,6 +547,14 @@ static int sx8634_setup(struct sx8634 *sx, struct sx8634_platform_data *pdata)
 	err = sx8634_spm_sync(sx);
 	if (err < 0)
 		return err;
+
+	/* FIXME: make this configurable */
+	err = sx8634_pwm_enable(sx, 0x7, 0xff);
+	if (err < 0) {
+		dev_err(&sx->client->dev, "%s failed: %d\n",
+			"sx8634_pwm_enable()", err);
+		return err;
+	}
 
 	sx->input->id.bustype = BUS_I2C;
 	sx->input->id.product = 0;
