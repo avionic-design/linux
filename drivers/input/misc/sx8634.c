@@ -64,11 +64,19 @@
 #define SPM_CAP_THRESHOLD(x) (0x13 + (x))
 #define SPM_CAP_THRESHOLD_MAX 0xff
 
+#define SPM_BTN_CFG 0x21
+#define SPM_BTN_CFG_TOUCH_DEBOUNCE_MASK 0x03
+#define SPM_BTN_CFG_TOUCH_DEBOUNCE_SHIFT 0
+
 #define SPM_BLOCK_SIZE 8
 #define SPM_NUM_BLOCKS 16
 #define SPM_SIZE (SPM_BLOCK_SIZE * SPM_NUM_BLOCKS)
 
 #define SLD_POS_STEP 12
+
+static int debounce = -1;
+module_param(debounce, int, S_IRUGO);
+MODULE_PARM_DESC(debounce, "number of debounce samples (1-4)");
 
 struct sx8634 {
 	struct i2c_client *client;
@@ -419,6 +427,28 @@ static int sx8634_set_threshold(struct sx8634 *sx, unsigned int cap,
 	return 0;
 }
 
+static int sx8634_set_debounce(struct sx8634 *sx, unsigned int samples)
+{
+	u8 value = 0;
+	int err;
+
+	if (samples < 1 || samples > 4)
+		return -EINVAL;
+
+	err = sx8634_spm_read(sx, SPM_BTN_CFG, &value);
+	if (err < 0)
+		return err;
+
+	value &= ~SPM_BTN_CFG_TOUCH_DEBOUNCE_MASK;
+	value |= (samples - 1) << SPM_BTN_CFG_TOUCH_DEBOUNCE_SHIFT;
+
+	err = sx8634_spm_write(sx, SPM_BTN_CFG, value);
+	if (err < 0)
+		return err;
+
+	return 0;
+}
+
 static int sx8634_pwm_enable(struct sx8634 *sx, unsigned int gpio,
 			     unsigned int brightness)
 {
@@ -509,11 +539,16 @@ static int sx8634_setup(struct sx8634 *sx, struct sx8634_platform_data *pdata)
 				"sx8634_set_threshold()", err);
 	}
 
-	err = sx8634_spm_sync(sx);
+	if (debounce < 0)
+		value = pdata->debounce;
+	else
+		value = debounce;
+
+	err = sx8634_set_debounce(sx, value);
 	if (err < 0)
 		return err;
 
-	err = sx8634_spm_load(sx);
+	err = sx8634_spm_sync(sx);
 	if (err < 0)
 		return err;
 
@@ -617,6 +652,7 @@ static int sx8634_parse_dt(struct device *dev, struct sx8634_platform_data *pdat
 	struct device_node *child = NULL;
 	u32 sensitivity_def = 0x00;
 	u32 threshold_def = 0xa0;
+	u32 debounce = 1;
 	int err;
 
 	if (!node)
@@ -639,6 +675,17 @@ static int sx8634_parse_dt(struct device *dev, struct sx8634_platform_data *pdat
 			 sensitivity_def, SPM_CAP_SENS_MAX);
 		sensitivity_def = SPM_CAP_SENS_MAX;
 	}
+
+	of_property_read_u32(node, "debounce", &debounce);
+
+	if (debounce < 1 || debounce > 4) {
+		dev_info(dev,
+			 "invalid number of debounce samples: %u, using %u\n",
+			 debounce, clamp_t(u32, debounce, 1, 4));
+		debounce = clamp_t(u32, debounce, 1, 4);
+	}
+
+	pdata->debounce = debounce;
 
 	while ((child = of_get_next_child(node, child))) {
 		u32 sensitivity = sensitivity_def;

@@ -28,6 +28,7 @@ struct sx8634_cap {
 struct sx8634_platform_data {
 	struct sx8634_cap caps[SX8634_NUM_CAPS];
 	int power_gpio;
+	int debounce;
 };
 
 #endif
