@@ -88,6 +88,8 @@ static int debounce = -1;
 module_param(debounce, int, S_IRUGO);
 MODULE_PARM_DESC(debounce, "number of debounce samples (1-4)");
 
+#define HACK_RETRY_IRQ 1
+
 struct sx8634 {
 	struct i2c_client *client;
 	struct input_dev *input;
@@ -95,6 +97,9 @@ struct sx8634 {
 	struct completion spm_complete;
 	unsigned long spm_dirty;
 	u8 spm_cache[SPM_SIZE];
+#ifdef HACK_RETRY_IRQ
+	bool initialized;
+#endif
 	u16 slider_max;
 	u16 status;
 	int power_gpio;
@@ -141,8 +146,12 @@ static inline int sx8634_write_block(struct sx8634 *sx, const void *buffer,
 
 static int spm_wait(struct sx8634 *sx)
 {
-	unsigned long timeout = msecs_to_jiffies(250);
+	unsigned long timeout = msecs_to_jiffies(50);
 
+#if 1
+	if (wait_for_completion_timeout(&sx->spm_complete, timeout) == 0)
+		return -ETIMEDOUT;
+#else
 	if (wait_for_completion_timeout(&sx->spm_complete, timeout) == 0) {
 		u8 value;
 		int err;
@@ -159,6 +168,7 @@ static int spm_wait(struct sx8634 *sx)
 
 		return (value & I2C_IRQ_SRC_SPM) ? 0 : -ETIMEDOUT;
 	}
+#endif
 
 	return 0;
 }
@@ -337,82 +347,120 @@ static int sx8634_spm_write(struct sx8634 *sx, unsigned int offset, u8 value)
 
 static irqreturn_t sx8634_irq(int irq, void *data)
 {
+	unsigned int retries = 8;
 	struct sx8634 *sx = data;
-	bool need_sync = false;
-	u8 pending;
-	int err;
 
-	err = sx8634_read(sx, I2C_IRQ_SRC, &pending);
-	if (err < 0)
-		return IRQ_NONE;
+	while (true) {
+		bool need_sync = false;
+		u8 pending;
+		int err;
 
-	if (pending & I2C_IRQ_SRC_COMPENSATION)
-		dev_dbg(&sx->client->dev, "compensation complete\n");
+		err = sx8634_read(sx, I2C_IRQ_SRC, &pending);
+		if (err < 0) {
+			if (retries--) {
+				usleep_range(8000, 16000);
+				continue;
+			}
 
-	if (pending & I2C_IRQ_SRC_BUTTONS) {
-		unsigned long changed;
-		unsigned int cap;
-		u16 status;
-		u8 value;
-
-		err = sx8634_read(sx, I2C_CAP_STAT_MSB, &value);
-		if (err < 0)
 			return IRQ_NONE;
-
-		status = value << 8;
-
-		err = sx8634_read(sx, I2C_CAP_STAT_LSB, &value);
-		if (err < 0)
-			return IRQ_NONE;
-
-		status |= value;
-
-		changed = status ^ sx->status;
-
-		for_each_set_bit(cap, &changed, SX8634_NUM_CAPS) {
-			unsigned int level = (status & BIT(cap)) ? 1 : 0;
-			input_report_key(sx->input, sx->keycodes[cap], level);
-			need_sync = true;
 		}
 
-		sx->status = status;
+		if (pending == 0) {
+			dev_dbg(&sx->client->dev, "no pending interrupts\n");
+			break;
+		}
+
+		if (pending & I2C_IRQ_SRC_MODE)
+			dev_dbg(&sx->client->dev, "operating mode changed\n");
+
+		if (pending & I2C_IRQ_SRC_COMPENSATION)
+			dev_dbg(&sx->client->dev, "compensation complete\n");
+
+		if (pending & I2C_IRQ_SRC_BUTTONS) {
+			unsigned long changed;
+			unsigned int cap;
+			u16 status;
+			u8 value;
+
+			dev_dbg(&sx->client->dev, "%s(): button event\n",
+				__func__);
+
+			err = sx8634_read(sx, I2C_CAP_STAT_MSB, &value);
+			if (err < 0)
+				return IRQ_NONE;
+
+			status = value << 8;
+
+			err = sx8634_read(sx, I2C_CAP_STAT_LSB, &value);
+			if (err < 0)
+				return IRQ_NONE;
+
+			status |= value;
+
+			changed = status ^ sx->status;
+
+			for_each_set_bit(cap, &changed, SX8634_NUM_CAPS) {
+				int level = (status & BIT(cap)) ? 1 : 0;
+				input_report_key(sx->input, sx->keycodes[cap],
+						 level);
+				need_sync = true;
+			}
+
+			sx->status = status;
+		}
+
+		if (pending & I2C_IRQ_SRC_SLIDER) {
+			u16 position;
+			u8 value;
+
+			dev_dbg(&sx->client->dev, "%s(): slider event\n",
+				__func__);
+
+			err = sx8634_read(sx, I2C_SLD_POS_MSB, &value);
+			if (err < 0)
+				return IRQ_NONE;
+
+			position = value << 8;
+
+			err = sx8634_read(sx, I2C_SLD_POS_LSB, &value);
+			if (err < 0)
+				return IRQ_NONE;
+
+			position |= value;
+
+			input_report_abs(sx->input, ABS_MISC, position);
+		}
+
+		if (need_sync || (pending & I2C_IRQ_SRC_SLIDER))
+			input_sync(sx->input);
+
+		if (pending & I2C_IRQ_SRC_GPI)
+			dev_dbg(&sx->client->dev, "%s(): GPI event\n",
+				__func__);
+
+		if (pending & I2C_IRQ_SRC_SPM) {
+			dev_dbg(&sx->client->dev, "%s(): SPM event\n",
+				__func__);
+			complete(&sx->spm_complete);
+		}
+
+		if (pending & I2C_IRQ_SRC_NVM)
+			dev_dbg(&sx->client->dev, "%s(): NVM event\n",
+				__func__);
+
+		if (pending & I2C_IRQ_SRC_READY)
+			dev_dbg(&sx->client->dev, "%s(): ready event\n",
+				__func__);
+
+#ifdef HACK_RETRY_IRQ
+		if (sx->initialized)
+			msleep(30);
+		else
+			break;
+#else
+		break;
+#endif
 	}
-
-	if (pending & I2C_IRQ_SRC_SLIDER) {
-		u16 position;
-		u8 value;
-
-		err = sx8634_read(sx, I2C_SLD_POS_MSB, &value);
-		if (err < 0)
-			return IRQ_NONE;
-
-		position = value << 8;
-
-		err = sx8634_read(sx, I2C_SLD_POS_LSB, &value);
-		if (err < 0)
-			return IRQ_NONE;
-
-		position |= value;
-
-		input_report_abs(sx->input, ABS_MISC, position);
-	}
-
-	if (need_sync || (pending & I2C_IRQ_SRC_SLIDER))
-		input_sync(sx->input);
-
-	if (pending & I2C_IRQ_SRC_GPI)
-		dev_dbg(&sx->client->dev, "%s(): GPI event\n", __func__);
-
-	if (pending & I2C_IRQ_SRC_SPM) {
-		dev_dbg(&sx->client->dev, "%s(): SPM event\n", __func__);
-		complete(&sx->spm_complete);
-	}
-
-	if (pending & I2C_IRQ_SRC_NVM)
-		dev_dbg(&sx->client->dev, "%s(): NVM event\n", __func__);
-
-	if (pending & I2C_IRQ_SRC_READY)
-		dev_dbg(&sx->client->dev, "%s(): ready event\n", __func__);
 
 	return IRQ_HANDLED;
 }
@@ -794,6 +842,7 @@ static int sx8634_i2c_probe(struct i2c_client *client,
 	struct sx8634_platform_data *pdata = client->dev.platform_data;
 	struct device_node *node = client->dev.of_node;
 	struct sx8634_platform_data defpdata;
+	unsigned int retries = 8;
 	struct sx8634 *sx;
 	int err = 0;
 	u8 value;
@@ -854,9 +903,22 @@ static int sx8634_i2c_probe(struct i2c_client *client,
 		goto remove_sysfs;
 	}
 
-	err = sx8634_setup(sx, pdata);
+	while (retries--) {
+		err = sx8634_setup(sx, pdata);
+		if (err < 0) {
+			dev_dbg(&client->dev, "setup failed, retrying...\n");
+			continue;
+		}
+
+		break;
+	}
+
 	if (err < 0)
 		goto free_power_gpio;
+
+#ifdef HACK_RETRY_IRQ
+	sx->initialized = true;
+#endif
 
 	err = sysfs_create_group(&client->dev.kobj, &sx8634_attr_group);
 	if (err < 0)
