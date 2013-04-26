@@ -53,13 +53,15 @@
 #define SPM_CAP_MODE(x) (((x) <= 3) ? 0x0c : (((x) <= 7) ? 0x0b : 0x0a))
 #define SPM_CAP_MODE_SHIFT(x) (((x) & 3) * 2)
 #define SPM_CAP_MODE_MASK 0x3
-#define SPM_CAP_MODE_MASK_SHIFTED(x) (SPM_CAP_MODE_MASK << SPM_CAP_MODE_SHIFT(x))
+#define SPM_CAP_MODE_MASK_SHIFTED(x) \
+	(SPM_CAP_MODE_MASK << SPM_CAP_MODE_SHIFT(x))
 
 #define SPM_CAP_SENS(x) (0x0d + ((x) / 2))
 #define SPM_CAP_SENS_MAX 0x7
 #define SPM_CAP_SENS_SHIFT(x) (((x) & 1) ? 0 : 4)
 #define SPM_CAP_SENS_MASK 0x7
-#define SPM_CAP_SENS_MASK_SHIFTED(x) (SPM_CAP_SENS_MASK << SPM_CAP_SENS_SHIFT(x))
+#define SPM_CAP_SENS_MASK_SHIFTED(x) \
+	(SPM_CAP_SENS_MASK << SPM_CAP_SENS_SHIFT(x))
 
 #define SPM_CAP_THRESHOLD(x) (0x13 + (x))
 #define SPM_CAP_THRESHOLD_MAX 0xff
@@ -73,6 +75,14 @@
 #define SPM_SIZE (SPM_BLOCK_SIZE * SPM_NUM_BLOCKS)
 
 #define SLD_POS_STEP 12
+
+static int sensitivity = -1;
+module_param(sensitivity, int, S_IRUGO);
+MODULE_PARM_DESC(sensitivity, "pad sensitivity (0-7)");
+
+static int threshold = -1;
+module_param(threshold, int, S_IRUGO);
+MODULE_PARM_DESC(threshold, "sample threshold (0-100)");
 
 static int debounce = -1;
 module_param(debounce, int, S_IRUGO);
@@ -153,30 +163,61 @@ static int spm_wait(struct sx8634 *sx)
 	return 0;
 }
 
+static inline ssize_t spm_start_read(struct sx8634 *sx, loff_t offset)
+{
+	u8 data[2];
+
+	data[0] = I2C_SPM_CFG_ON | I2C_SPM_CFG_READ;
+	data[1] = offset & 0xf8;
+
+	return i2c_smbus_write_i2c_block_data(sx->client, I2C_SPM_CFG,
+					      sizeof(data), data);
+}
+
+static inline ssize_t spm_start_write(struct sx8634 *sx, loff_t offset)
+{
+	u8 data[2];
+
+	data[0] = I2C_SPM_CFG_ON | I2C_SPM_CFG_WRITE;
+	data[1] = offset & 0xf8;
+
+	return i2c_smbus_write_i2c_block_data(sx->client, I2C_SPM_CFG,
+					      sizeof(data), data);
+}
+
+static inline int spm_stop(struct sx8634 *sx)
+{
+	return sx8634_write(sx, I2C_SPM_CFG, 0);
+}
+
 static ssize_t spm_read_block(struct sx8634 *sx, loff_t offset, void *buffer,
 			      size_t size)
 {
-	u8 enable = I2C_SPM_CFG_ON | I2C_SPM_CFG_READ;
 	int err;
 
-	BUG_ON(size < SPM_BLOCK_SIZE);
+	BUG_ON(size != SPM_BLOCK_SIZE);
 	BUG_ON((offset & 7) != 0);
 
-	err = sx8634_write(sx, I2C_SPM_CFG, enable);
-	if (err < 0)
+	err = spm_start_read(sx, offset);
+	if (err < 0) {
+		dev_dbg(&sx->client->dev,
+			"failed to start SPM read cycle: %d\n", err);
 		return err;
-
-	err = sx8634_write(sx, I2C_SPM_BASE, offset);
-	if (err < 0)
-		return err;
+	}
 
 	err = sx8634_read_block(sx, buffer, SPM_BLOCK_SIZE);
-	if (err < 0)
+	if (err < 0) {
+		dev_dbg(&sx->client->dev, "failed to read SPM block: %d\n",
+			err);
 		return err;
+	}
 
-	err = sx8634_write(sx, I2C_SPM_CFG, I2C_SPM_CFG_OFF);
-	if (err < 0)
+	err = spm_stop(sx);
+	if (err < 0) {
+		dev_dbg(&sx->client->dev, "failed to stop SPM read cycle: %d\n",
+			err);
 		return err;
+	}
 
 	return 0;
 }
@@ -184,31 +225,41 @@ static ssize_t spm_read_block(struct sx8634 *sx, loff_t offset, void *buffer,
 static ssize_t spm_write_block(struct sx8634 *sx, loff_t offset,
 			       const void *buffer, size_t size)
 {
-	u8 enable = I2C_SPM_CFG_ON | I2C_SPM_CFG_WRITE;
 	int err;
 
-	BUG_ON(size < SPM_BLOCK_SIZE);
+	BUG_ON(size != SPM_BLOCK_SIZE);
 	BUG_ON((offset & 7) != 0);
 
-	err = sx8634_write(sx, I2C_SPM_CFG, enable);
-	if (err < 0)
+	err = spm_start_write(sx, offset);
+	if (err < 0) {
+		dev_dbg(&sx->client->dev,
+			"failed to start SPM write cycle: %d\n", err);
 		return err;
-
-	err = sx8634_write(sx, I2C_SPM_BASE, offset);
-	if (err < 0)
-		return err;
+	}
 
 	err = sx8634_write_block(sx, buffer, SPM_BLOCK_SIZE);
-	if (err < 0)
+	if (err < 0) {
+		dev_dbg(&sx->client->dev, "failed to write SPM block: %d\n",
+			err);
 		return err;
+	}
 
-	err = sx8634_write(sx, I2C_SPM_CFG, I2C_SPM_CFG_OFF);
-	if (err < 0)
+	err = spm_stop(sx);
+	if (err < 0) {
+		dev_dbg(&sx->client->dev,
+			"failed to stop SPM write cycle: %d\n", err);
 		return err;
+	}
+
+	dev_dbg(&sx->client->dev, "SPM block %llu written\n",
+		offset / SPM_BLOCK_SIZE);
 
 	err = spm_wait(sx);
-	if (err < 0)
+	if (err < 0) {
+		dev_dbg(&sx->client->dev,
+			"failed to wait for SPM write completion: %d\n", err);
 		return err;
+	}
 
 	return 0;
 }
@@ -395,7 +446,7 @@ static int sx8634_set_sensitivity(struct sx8634 *sx, unsigned int cap,
 	u8 value = 0;
 	int err = 0;
 
-	if (cap >= SX8634_NUM_CAPS)
+	if (cap >= SX8634_NUM_CAPS || sensitivity > 0x7)
 		return -EINVAL;
 
 	err = sx8634_spm_read(sx, SPM_CAP_SENS(cap), &value);
@@ -417,7 +468,7 @@ static int sx8634_set_threshold(struct sx8634 *sx, unsigned int cap,
 {
 	int err;
 
-	if (cap >= SX8634_NUM_CAPS)
+	if (cap >= SX8634_NUM_CAPS || threshold > 0xa0)
 		return -EINVAL;
 
 	err = sx8634_spm_write(sx, SPM_CAP_THRESHOLD(cap), threshold);
@@ -503,6 +554,7 @@ static int sx8634_setup(struct sx8634 *sx, struct sx8634_platform_data *pdata)
 {
 	bool slider = false;
 	unsigned int i;
+	u8 value;
 	int err;
 
 	err = sx8634_spm_load(sx);
@@ -520,20 +572,34 @@ static int sx8634_setup(struct sx8634 *sx, struct sx8634_platform_data *pdata)
 	if (err < 0)
 		return err;
 
-	err = sx8634_spm_load(sx);
-	if (err < 0)
+	/* FIXME: make this configurable */
+	err = sx8634_pwm_enable(sx, 0x7, 0xff);
+	if (err < 0) {
+		dev_err(&sx->client->dev, "%s failed: %d\n",
+			"sx8634_pwm_enable()", err);
 		return err;
+	}
 
 	/* configure capacitive sensor parameters */
 	for (i = 0; i < SX8634_NUM_CAPS; i++) {
 		struct sx8634_cap *cap = &pdata->caps[i];
 
-		err = sx8634_set_sensitivity(sx, i, cap->sensitivity);
+		if (sensitivity < 0)
+			value = cap->sensitivity;
+		else
+			value = sensitivity;
+
+		err = sx8634_set_sensitivity(sx, i, value);
 		if (err < 0)
 			dev_err(&sx->client->dev, "%s failed: %d\n",
 				"sx8634_set_sensitivity()", err);
 
-		err = sx8634_set_threshold(sx, i, cap->threshold);
+		if (threshold < 0)
+			value = cap->threshold;
+		else
+			value = threshold;
+
+		err = sx8634_set_threshold(sx, i, value);
 		if (err < 0)
 			dev_err(&sx->client->dev, "%s failed: %d\n",
 				"sx8634_set_threshold()", err);
@@ -582,14 +648,6 @@ static int sx8634_setup(struct sx8634 *sx, struct sx8634_platform_data *pdata)
 	err = sx8634_spm_sync(sx);
 	if (err < 0)
 		return err;
-
-	/* FIXME: make this configurable */
-	err = sx8634_pwm_enable(sx, 0x7, 0xff);
-	if (err < 0) {
-		dev_err(&sx->client->dev, "%s failed: %d\n",
-			"sx8634_pwm_enable()", err);
-		return err;
-	}
 
 	sx->input->id.bustype = BUS_I2C;
 	sx->input->id.product = 0;
@@ -646,7 +704,8 @@ static const struct attribute_group sx8634_attr_group = {
 	.attrs = sx8634_attributes,
 };
 
-static int sx8634_parse_dt(struct device *dev, struct sx8634_platform_data *pdata)
+static int sx8634_parse_dt(struct device *dev,
+			   struct sx8634_platform_data *pdata)
 {
 	struct device_node *node = dev->of_node;
 	struct device_node *child = NULL;
@@ -700,7 +759,7 @@ static int sx8634_parse_dt(struct device *dev, struct sx8634_platform_data *pdat
 				child->name);
 			continue;
 		}
- 
+
 		if (index >= SX8634_NUM_CAPS) {
 			dev_err(dev, "invalid value for \"reg\" property: %u\n",
 				index);
@@ -769,18 +828,12 @@ static int sx8634_i2c_probe(struct i2c_client *client,
 	sx->client = client;
 
 	if (gpio_is_valid(sx->power_gpio)) {
-		err = gpio_request(sx->power_gpio, "sx8634 power");
+		err = gpio_request_one(sx->power_gpio, GPIOF_OUT_INIT_HIGH,
+				       "sx8634 power");
 		if (err < 0) {
 			dev_err(&client->dev,
-				"failed to request power GPIO: %d\n", err);
+				"failed to setup power GPIO: %d\n", err);
 			goto free_input_device;
-		}
-
-		err = gpio_direction_output(sx->power_gpio, 1);
-		if (err < 0) {
-			dev_err(&client->dev, "failed to enable power: %d\n",
-				err);
-			goto free_power_gpio;
 		}
 
 		msleep(150);
