@@ -52,6 +52,7 @@ MODULE_DESCRIPTION("HID multitouch panels");
 MODULE_LICENSE("GPL");
 
 #include "hid-ids.h"
+#include "usbhid/usbhid.h"
 
 /* quirks to control the device */
 #define MT_QUIRK_NOT_SEEN_MEANS_UP	(1 << 0)
@@ -72,6 +73,60 @@ MODULE_LICENSE("GPL");
 #define MT_INPUTMODE_TOUCHPAD		0x03
 
 #define MT_BUTTONTYPE_CLICKPAD		0
+
+#ifdef CONFIG_EGALAX_HACK
+
+#ifdef CONFIG_EGALAX_HACK_PRINT_EVENTS
+static bool egalax_hack_print_event = true;
+#else
+static bool egalax_hack_print_event;
+#endif
+module_param(egalax_hack_print_event, bool, 0644);
+MODULE_PARM_DESC(egalax_hack_print_event, "Print all touch events.");
+
+#ifdef CONFIG_EGALAX_HACK_FRAME_FILTER
+static bool egalax_hack_frame_filter = true;
+#else
+static bool egalax_hack_frame_filter;
+#endif
+module_param(egalax_hack_frame_filter, bool, 0644);
+MODULE_PARM_DESC(egalax_hack_frame_filter,
+	"Filter all events outside of defined frame.");
+
+static unsigned int egalax_hack_event_max_triger =
+	CONFIG_EGALAX_HACK_EVENT_MAX_TRIGGER;
+module_param(egalax_hack_event_max_triger, uint, 0644);
+MODULE_PARM_DESC(egalax_hack_event_max_triger, "Maximum trigger rate for " \
+	"events if only the coordinate has changed (ms).");
+
+static unsigned int egalax_hack_frame_max_x = CONFIG_EGALAX_HACK_FRAME_MAX_X;
+module_param(egalax_hack_frame_max_x, uint, 0644);
+MODULE_PARM_DESC(egalax_hack_frame_max_x, "Filter frame max x value.");
+
+static unsigned int egalax_hack_frame_min_x = CONFIG_EGALAX_HACK_FRAME_MIN_X;
+module_param(egalax_hack_frame_min_x, uint, 0644);
+MODULE_PARM_DESC(egalax_hack_frame_min_x, "Filter frame min x value.");
+
+static unsigned int egalax_hack_frame_max_y = CONFIG_EGALAX_HACK_FRAME_MAX_Y;
+module_param(egalax_hack_frame_max_y, uint, 0644);
+MODULE_PARM_DESC(egalax_hack_frame_max_y, "Filter frame max y value.");
+
+static unsigned int egalax_hack_frame_min_y = CONFIG_EGALAX_HACK_FRAME_MIN_Y;
+module_param(egalax_hack_frame_min_y, uint, 0644);
+MODULE_PARM_DESC(egalax_hack_frame_min_y, "Filter frame min y value.");
+
+static unsigned int egalax_hack_fail_min_count =
+	CONFIG_EGALAX_HACK_FAIL_MIN_COUNT;
+module_param(egalax_hack_fail_min_count, uint, 0644);
+MODULE_PARM_DESC(egalax_hack_fail_min_count,
+	"Minimum number of fail events before fail state is assumed.");
+
+static unsigned int egalax_hack_fail_timeout = CONFIG_EGALAX_HACK_FAIL_TIMEOUT;
+module_param(egalax_hack_fail_timeout, uint, 0644);
+MODULE_PARM_DESC(egalax_hack_fail_timeout,
+	"Timeout for collecting fail events before fail state is assumed (ms)");
+
+#endif
 
 struct mt_slot {
 	__s32 x, y, cx, cy, p, w, h;
@@ -122,6 +177,14 @@ struct mt_device {
 	bool serial_maybe;	/* need to check for serial protocol */
 	bool curvalid;		/* is the current contact valid? */
 	unsigned mt_flags;	/* flags to pass to input-mt */
+#ifdef CONFIG_EGALAX_HACK
+	bool use_egalax_hack;
+	struct mt_slot lastdata[CONFIG_EGALAX_HACK_MAX_SLOTS];
+	unsigned long nextmove[CONFIG_EGALAX_HACK_MAX_SLOTS];
+	unsigned long timeout;
+	unsigned long failed;
+	bool recover_reset;
+#endif
 };
 
 static void mt_post_parse_default_settings(struct mt_device *td);
@@ -621,6 +684,100 @@ static int mt_touch_event(struct hid_device *hid, struct hid_field *field,
 	return 1;
 }
 
+#ifdef CONFIG_EGALAX_HACK
+static bool mt_egalax_check(struct mt_device *td)
+{
+	unsigned long now = jiffies;
+	bool fail;
+
+	if (!td->use_egalax_hack)
+		return true;
+
+	if (egalax_hack_event_max_triger &&
+	    (td->curdata.contactid >= 0) &&
+	    (td->curdata.contactid < CONFIG_EGALAX_HACK_MAX_SLOTS)) {
+		if (time_before(now, td->nextmove[td->curdata.contactid])) {
+			td->lastdata[td->curdata.contactid].x = td->curdata.x;
+			td->lastdata[td->curdata.contactid].y = td->curdata.y;
+		}
+		if (!memcmp(&td->lastdata[td->curdata.contactid],
+			    &td->curdata, sizeof(td->curdata)))
+			td->curvalid = false; /* Don't report same event */
+		if (td->curvalid)
+			td->nextmove[td->curdata.contactid] = now +
+				msecs_to_jiffies(egalax_hack_event_max_triger);
+		td->lastdata[td->curdata.contactid] = td->curdata;
+	}
+	if (egalax_hack_frame_filter &&
+	    ((td->curdata.x < egalax_hack_frame_min_x) ||
+	     (td->curdata.x > egalax_hack_frame_max_x) ||
+	     (td->curdata.y < egalax_hack_frame_min_y) ||
+	     (td->curdata.y > egalax_hack_frame_max_y))) {
+		if (td->failed) {
+			td->curvalid = false;
+			if (time_after(now, td->timeout)) {
+				fail = td->failed > egalax_hack_fail_min_count;
+				td->failed = 0;
+				if (fail)
+					return false;
+			} else
+				td->failed++;
+		} else if (td->curvalid) {
+			td->failed  = 1;
+			td->timeout = now +
+				msecs_to_jiffies(egalax_hack_fail_timeout);
+			/* Report as pen up event */
+			td->curdata.touch_state = 0;
+		}
+	} else
+		td->failed = 0;
+	if (egalax_hack_print_event) {
+		pr_info("%s x:%04x y:%04x w:%x h:%x S%d ID%d P%d " \
+			"t[%d] c[%ld/%d] mt %d %s",
+			td->curvalid ? "USE" : "ign",
+			td->curdata.x, td->curdata.y, td->curdata.w,
+			td->curdata.h, td->curdata.touch_state,
+			td->curdata.contactid, td->curdata.p,
+			td->failed ? jiffies_to_msecs(td->timeout-now) : 0,
+			td->failed, egalax_hack_fail_min_count,
+			egalax_hack_event_max_triger,
+			egalax_hack_frame_filter ? "" : "\n");
+		if (egalax_hack_frame_filter) {
+			pr_info("f[x: %x..%x y:%x..%x]\n",
+				egalax_hack_frame_min_x,
+				egalax_hack_frame_max_x,
+				egalax_hack_frame_min_y,
+				egalax_hack_frame_max_y);
+		}
+	}
+	return true;
+}
+
+static void mt_set_input_mode(struct hid_device *hdev);
+
+static void mt_egalax_recover_reset(struct mt_device *td,
+				    struct hid_device *hid)
+{
+	if (!td->use_egalax_hack || !td->recover_reset || td->curvalid)
+		return;
+	pr_info("Recovered from failed egalax check.\n");
+	td->recover_reset = false;
+	/* after recovering from reset, we have to set the input mode again */
+	mt_set_input_mode(hid);
+	return;
+}
+
+static void mt_egalax_do_reset(struct mt_device *td, struct hid_device *hid)
+{
+	struct usbhid_device *usbhid = hid->driver_data;
+
+	if (!test_and_set_bit(HID_RESET_PENDING, &usbhid->iofl))
+		schedule_work(&usbhid->reset_work);
+	td->recover_reset = true;
+	pr_warn("Egalax check failed. Trying to recover...\n");
+}
+#endif
+
 static void mt_process_mt_event(struct hid_device *hid, struct hid_field *field,
 				struct hid_usage *usage, __s32 value)
 {
@@ -684,8 +841,15 @@ static void mt_process_mt_event(struct hid_device *hid, struct hid_field *field,
 
 		if (usage->usage_index + 1 == field->report_count) {
 			/* we only take into account the last report. */
-			if (usage->hid == td->last_slot_field)
+			if (usage->hid == td->last_slot_field) {
+#ifdef CONFIG_EGALAX_HACK
+				if (!mt_egalax_check(td))
+					mt_egalax_do_reset(td, hid);
+				else
+					mt_egalax_recover_reset(td, hid);
+#endif
 				mt_complete_slot(td, field->hidinput->input);
+			}
 		}
 
 	}
@@ -1033,6 +1197,16 @@ static int mt_probe(struct hid_device *hdev, const struct hid_device_id *id)
 	td->inputmode_value = MT_INPUTMODE_TOUCHSCREEN;
 	td->cc_index = -1;
 	td->mt_report_id = -1;
+#ifdef CONFIG_EGALAX_HACK
+	td->use_egalax_hack =
+		((USB_VENDOR_ID_DWAV == id->vendor) &&
+		 (USB_DEVICE_ID_DWAV_EGALAX_MULTITOUCH_73F7 == id->product));
+#ifdef USB_DEVICE_ID_DWAV_EGALAX_MULTITOUCH_7201
+	td->use_egalax_hack |=
+		((USB_VENDOR_ID_DWAV == id->vendor) &&
+		 (USB_DEVICE_ID_DWAV_EGALAX_MULTITOUCH_7201 == id->product));
+#endif
+#endif
 	hid_set_drvdata(hdev, td);
 
 	td->fields = devm_kzalloc(&hdev->dev, sizeof(struct mt_fields),
