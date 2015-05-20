@@ -986,11 +986,23 @@ static int intel_backlight_device_update_status(struct backlight_device *bd)
 	struct intel_connector *connector = bl_get_data(bd);
 	struct intel_panel *panel = &connector->panel;
 	struct drm_device *dev = connector->base.dev;
+	int brightness = bd->props.brightness;
 
 	drm_modeset_lock(&dev->mode_config.connection_mutex, NULL);
 	DRM_DEBUG_KMS("updating intel_backlight, brightness=%d/%d\n",
 		      bd->props.brightness, bd->props.max_brightness);
-	intel_panel_set_backlight(connector, bd->props.brightness,
+
+	/* When no backlight power control is available use 0 brightness
+	 * to simulate turning off. */
+	if (!panel->backlight_power) {
+		if (bd->props.power != FB_BLANK_UNBLANK)
+			brightness = 0;
+
+		if (bd->props.fb_blank != FB_BLANK_UNBLANK)
+			brightness = 0;
+	}
+
+	intel_panel_set_backlight(connector, brightness,
 				  bd->props.max_brightness);
 
 	/*
@@ -1217,7 +1229,9 @@ static int i9xx_setup_backlight(struct intel_connector *connector, enum pipe unu
 	if (!panel->backlight.max)
 		return -ENODEV;
 
-	panel->backlight.min = get_backlight_min_vbt(connector);
+	/* Allow using brightness 0 if there is no power control */
+	panel->backlight.min = panel->backlight_power ?
+		get_backlight_min_vbt(connector) : 0;
 
 	val = i9xx_get_backlight(connector);
 	panel->backlight.level = intel_panel_compute_brightness(connector, val);
