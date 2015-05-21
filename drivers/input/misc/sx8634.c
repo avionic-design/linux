@@ -877,7 +877,7 @@ static int sx8634_i2c_probe(struct i2c_client *client,
 	sx->client = client;
 
 	if (gpio_is_valid(sx->power_gpio)) {
-		err = gpio_request_one(sx->power_gpio, GPIOF_OUT_INIT_HIGH,
+		err = gpio_request_one(sx->power_gpio, GPIOF_OUT_INIT_LOW,
 				       "sx8634 power");
 		if (err < 0) {
 			dev_err(&client->dev,
@@ -885,6 +885,8 @@ static int sx8634_i2c_probe(struct i2c_client *client,
 			goto free_input_device;
 		}
 
+		msleep(150);
+		gpio_direction_output(sx->power_gpio, 1);
 		msleep(150);
 	}
 
