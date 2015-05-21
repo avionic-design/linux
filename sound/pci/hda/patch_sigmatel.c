@@ -102,6 +102,7 @@ enum {
 	STAC_HP_ENVY_TS_BASS,
 	STAC_HP_ENVY_TS_DAC_BIND,
 	STAC_92HD83XXX_GPIO10_EAPD,
+	STAC_AD_MEDATOM,
 	STAC_92HD83XXX_MODELS
 };
 
@@ -178,6 +179,46 @@ enum {
 	STAC_9872_MODELS
 };
 
+struct sigmatel_mic_route {
+	hda_nid_t pin;
+	signed char mux_idx;
+	signed char dmux_idx;
+};
+
+#define MAX_PINS_NUM 16
+#define MAX_ADCS_NUM 4
+#define MAX_DMICS_NUM 4
+
+struct sigmatel_nid_map {
+	const char *name;
+	hda_nid_t nid;
+	unsigned int num_nids;
+	hda_nid_t *nids;
+};
+
+static hda_nid_t ad_medatom_dac0_nids[] = { 0x0a, 0x0b };
+static hda_nid_t ad_medatom_dac1_nids[] = { 0x0d };
+static hda_nid_t ad_medatom_dac2_nids[] = { 0x10 };
+
+static struct sigmatel_nid_map ad_medatom_dac_map[] = {
+	{ /* headset */
+		.name = "Headphone",
+		.nid = 0x13,
+		.num_nids = ARRAY_SIZE(ad_medatom_dac0_nids),
+		.nids = ad_medatom_dac0_nids
+	}, { /* speaker */
+		.name = "Speaker",
+		.nid = 0x14,
+		.num_nids = ARRAY_SIZE(ad_medatom_dac1_nids),
+		.nids = ad_medatom_dac1_nids
+	}, { /* handset */
+		.name = "Front",
+		.nid = 0x22,
+		.num_nids = ARRAY_SIZE(ad_medatom_dac2_nids),
+		.nids = ad_medatom_dac2_nids
+	}
+};
+
 struct sigmatel_spec {
 	struct hda_gen_spec gen;
 
@@ -220,6 +261,9 @@ struct sigmatel_spec {
 
 	/* beep widgets */
 	hda_nid_t anabeep_nid;
+
+	struct sigmatel_nid_map *dac_map;
+	unsigned int num_dac_map;
 
 	/* SPDIF-out mux */
 	const char * const *spdif_labels;
@@ -2075,6 +2119,20 @@ static const struct hda_pintbl hp_cNB11_intquad_pin_configs[] = {
 	{}
 };
 
+static const struct hda_pintbl ad_medatom_pin_configs[] = {
+	{ 0x0a, 0x03210010 },
+	{ 0x0b, 0x01210020 },
+	{ 0x0c, 0x03a10030 },
+	{ 0x0d, 0x90100140 },
+	{ 0x0e,	0x01810050 },
+	{ 0x0f, 0x90a00160 },
+	{ 0x10, 0x00000170 },
+	{ 0x11, 0x40f000f0 },
+	{ 0x1f, 0x40f000f0 },
+	{ 0x20, 0x40f000f0 },
+	{}
+};
+
 static void stac92hd83xxx_fixup_hp(struct hda_codec *codec,
 				   const struct hda_fixup *fix, int action)
 {
@@ -2713,6 +2771,10 @@ static const struct hda_fixup stac92hd83xxx_fixups[] = {
 		.type = HDA_FIXUP_FUNC,
 		.v.func = stac92hd83xxx_fixup_gpio10_eapd,
 	},
+	[STAC_AD_MEDATOM] = {
+		.type = HDA_FIXUP_PINS,
+		.v.pins = ad_medatom_pin_configs,
+	},
 };
 
 static const struct hda_model_fixup stac92hd83xxx_models[] = {
@@ -2730,6 +2792,7 @@ static const struct hda_model_fixup stac92hd83xxx_models[] = {
 	{ .id = STAC_HP_ENVY_BASS, .name = "hp-envy-bass" },
 	{ .id = STAC_HP_BNB13_EQ, .name = "hp-bnb13-eq" },
 	{ .id = STAC_HP_ENVY_TS_BASS, .name = "hp-envy-ts-bass" },
+	{ .id = STAC_AD_MEDATOM, .name = "ad-medatom" },
 	{}
 };
 
@@ -4638,6 +4701,12 @@ static int patch_stac92hd83xxx(struct hda_codec *codec)
 	spec->pwr_nids = stac92hd83xxx_pwr_nids;
 	spec->num_pwrs = ARRAY_SIZE(stac92hd83xxx_pwr_nids);
 	spec->default_polarity = -1; /* no default cfg */
+
+	if (codec->preset && codec->preset->id == STAC_AD_MEDATOM) {
+		dev_info(&codec->dev, "Loaded DAC table!\n");
+		spec->num_dac_map = ARRAY_SIZE(ad_medatom_dac_map);
+		spec->dac_map = ad_medatom_dac_map;
+	}
 
 	codec->patch_ops = stac_patch_ops;
 
