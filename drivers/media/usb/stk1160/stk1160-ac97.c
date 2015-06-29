@@ -79,6 +79,11 @@ static void stk1160_reset_ac97(struct snd_ac97 *ac97)
 
 	/* Set 16-bit audio data and choose L&R channel*/
 	stk1160_write_reg(dev, STK1160_AC97CTL_1 + 2, 0x01);
+
+	/* Record Select (Line In L/R) Default is 0x0000 (no selection) */
+	stk1160_write_ac97(ac97, 0x001A, 0x0404);
+	/* Record Gain (0 dB) Default is 0x8000H (muted) */
+	stk1160_write_ac97(ac97, 0x001C, 0x0000);
 }
 
 static struct snd_ac97_bus_ops stk1160_ac97_ops = {
