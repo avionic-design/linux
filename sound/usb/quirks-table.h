@@ -3178,4 +3178,14 @@ AU0828_DEVICE(0x2040, 0x7270, "Hauppauge", "HVR-950Q"),
 	}
 },
 
+{
+	USB_DEVICE(0x05e1, 0x0408),
+	.driver_info = (unsigned long) &(const struct snd_usb_audio_quirk) {
+		/* .vendor_name = "Syntek Semiconductor Co., Ltd", */
+		/* .product_name = "STK1160 Video Capture Device", */
+		.ifnum = QUIRK_ANY_INTERFACE,
+		.type = QUIRK_AUDIO_ALIGN_TRANSFER
+	}
+},
+
 #undef USB_DEVICE_VENDOR_SPEC
