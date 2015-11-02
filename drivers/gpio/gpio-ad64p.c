@@ -389,7 +389,7 @@ static int ad64p_gpio_probe(struct pci_dev *dev,
 		goto release;
 	}
 
-	gpio->chip.label = dev_name(&dev->dev);
+	gpio->chip.label = "gpio-ad64p";
 	gpio->chip.owner = THIS_MODULE;
 	gpio->chip.dev = &dev->dev;
 	gpio->chip.direction_input = ad64p_gpio_set_input;
