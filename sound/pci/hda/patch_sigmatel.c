@@ -4703,7 +4703,6 @@ static int patch_stac92hd83xxx(struct hda_codec *codec)
 	spec->default_polarity = -1; /* no default cfg */
 
 	if (codec->preset && codec->preset->id == STAC_AD_MEDATOM) {
-		dev_info(&codec->dev, "Loaded DAC table!\n");
 		spec->num_dac_map = ARRAY_SIZE(ad_medatom_dac_map);
 		spec->dac_map = ad_medatom_dac_map;
 	}
