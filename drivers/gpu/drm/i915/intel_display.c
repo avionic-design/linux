@@ -13599,6 +13599,13 @@ static void quirk_backlight_present(struct drm_device *dev)
 	DRM_INFO("applying backlight present quirk\n");
 }
 
+static void quirk_force_backlight_dp(struct drm_device *dev)
+{
+	struct drm_i915_private *dev_priv = dev->dev_private;
+	dev_priv->quirks |= QUIRK_FORCE_BACKLIGHT_DP;
+	DRM_INFO("applying force backlight dp quirk\n");
+}
+
 struct intel_quirk {
 	int device;
 	int subsystem_vendor;
@@ -13688,6 +13695,9 @@ static struct intel_quirk intel_quirks[] = {
 
 	/* Dell Chromebook 11 */
 	{ 0x0a06, 0x1028, 0x0a35, quirk_backlight_present },
+
+	/* Kontron COMe-mBTc10 N2807 BayTrail */
+	{ 0x0f31, 0x8086, 0x7270, quirk_force_backlight_dp },
 };
 
 static void intel_init_quirks(struct drm_device *dev)

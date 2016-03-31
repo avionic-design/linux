@@ -5563,6 +5563,22 @@ intel_dp_init_connector(struct intel_digital_port *intel_dig_port,
 		return false;
 	}
 
+	if (dev_priv->quirks & QUIRK_FORCE_BACKLIGHT_DP &&
+			!is_edp(intel_dp) &&
+			intel_dp->DP & TRANS_DP_OUTPUT_ENABLE) {
+		enum pipe p = PORT_TO_PIPE(intel_dp->DP);
+
+		if (IS_VALLEYVIEW(dev)) {
+			u32 cur_val = I915_READ(VLV_BLC_PWM_CTL(p));
+
+			/* Force setting frequency */
+			cur_val &= BACKLIGHT_DUTY_CYCLE_MASK;
+			I915_WRITE(VLV_BLC_PWM_CTL(p), cur_val);
+		}
+
+		intel_panel_setup_backlight(&intel_connector->base, p);
+	}
+
 	intel_dp_add_properties(intel_dp, connector);
 
 	/* For G4X desktop chip, PEG_BAND_GAP_DATA 3:0 must first be written
